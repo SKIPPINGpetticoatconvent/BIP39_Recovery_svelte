@@ -335,10 +335,10 @@
 <style>
   .app {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: #f5f5f5;
+    background: var(--color-bg);
     min-height: 100vh;
     padding: 20px;
-    color: #333;
+    color: var(--color-text);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -355,8 +355,8 @@
 
   .lang-btn {
     padding: 8px 16px;
-    border: 1px solid #ddd;
-    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
     border-radius: 6px;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -372,7 +372,7 @@
     max-width: 550px;
     width: 100%;
     margin: 80px auto 0;
-    background: #ffffff;
+    background: var(--color-surface);
     padding: 40px;
     border-radius: 8px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
@@ -380,14 +380,14 @@
   }
 
   h1 {
-    color: #2c3e50;
+    color: var(--color-heading);
     margin-bottom: 20px;
     font-size: 2rem;
   }
 
   .welcome p {
     margin: 20px 0;
-    color: #666;
+    color: var(--color-muted);
     font-size: 1.1rem;
   }
 
@@ -400,9 +400,9 @@
 
   .length-btn {
     padding: 12px 24px;
-    background: #ffffff;
-    color: #333;
-    border: 1px solid #dee2e6;
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border-strong);
     border-radius: 6px;
     cursor: pointer;
     font-size: 1rem;
@@ -410,7 +410,7 @@
   }
 
   .length-btn:hover {
-    background: #f8f9fa;
+    background: var(--color-surface-contrast);
     border-color: #007bff;
   }
 
@@ -432,7 +432,7 @@
     display: block;
     margin-bottom: 10px;
     font-weight: bold;
-    color: #2c3e50;
+    color: var(--color-heading);
   }
 
   .input-row {
@@ -444,7 +444,7 @@
   .input-row input {
     flex: 1;
     padding: 12px;
-    border: 2px solid #ddd;
+    border: 2px solid var(--color-border);
     border-radius: 6px;
     font-size: 1rem;
   }
@@ -471,7 +471,7 @@
   .status-section {
     margin: 20px 0;
     padding: 15px;
-    background: #f8f9fa;
+    background: var(--color-surface-contrast);
     border-radius: 6px;
   }
 
@@ -499,12 +499,12 @@
   }
 
   .words-section h3 {
-    color: #2c3e50;
+    color: var(--color-heading);
     margin: 30px 0 15px;
   }
 
   .words-list {
-    background: #f8f9fa;
+    background: var(--color-surface-contrast);
     border-radius: 8px;
     padding: 15px;
     max-height: 200px;
@@ -516,7 +516,7 @@
     align-items: center;
     margin: 8px 0;
     padding: 8px 12px;
-    background: white;
+    background: var(--color-surface);
     border-radius: 4px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   }
@@ -530,7 +530,7 @@
 
   .word-text {
     font-family: 'Courier New', monospace;
-    color: #2c3e50;
+    color: var(--color-heading);
   }
 
   .final-words {
@@ -539,7 +539,7 @@
     gap: 10px;
     margin: 30px 0;
     padding: 20px;
-    background: #f8f9fa;
+    background: var(--color-surface-contrast);
     border-radius: 8px;
   }
 
@@ -547,7 +547,7 @@
     display: flex;
     align-items: center;
     padding: 10px 15px;
-    background: white;
+    background: var(--color-surface);
     border-radius: 6px;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     font-family: 'Courier New', monospace;
@@ -559,7 +559,7 @@
   }
 
   .final-word-item .word-text {
-    color: #2c3e50;
+    color: var(--color-heading);
     font-weight: bold;
   }
 
