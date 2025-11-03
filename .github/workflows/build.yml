@@ -1,49 +1,49 @@
-name: Build (Windows + macOS + Linux)
+name: Build and Release (Windows + macOS + Linux)
+
+# ==========================================================
+# 权限声明
+# ==========================================================
+permissions:
+  contents: write # 授予 GITHUB_TOKEN 对仓库内容的写权限，以便推送版本更新和创建 Release
 
 on:
   push:
-    branches: [main, master]
-    tags: ["v*"]
+    branches:
+      - main
+      - master
   pull_request:
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-20.04
-            short: linux
-            build_flags: "-clean"
-          - os: windows-latest
-            short: windows
-            build_flags: "-clean -upx -nsis"
-          - os: macos-latest
-            short: macos
-            build_flags: "-clean"
-
+  # ==========================================================
+  # Linux 构建任务
+  # ==========================================================
+  build-linux:
+    name: 构建 Linux
+    runs-on: ubuntu-20.04
     steps:
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Setup Go
+      - name: 设置 Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
           cache: true
 
-      - name: Setup Node.js
+      - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "18"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install system dependencies (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
+      - name: 安装系统依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -52,40 +52,317 @@ jobs:
             build-essential \
             pkg-config
 
-      - name: Install UPX and NSIS (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install upx nsis -y
-
-      - name: Add GOPATH/bin to PATH
+      - name: 添加 GOPATH/bin 到 PATH
         run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
-        shell: bash
 
-      - name: Install Wails CLI
+      - name: 安装 Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
-      - name: Build frontend
+      - name: 构建前端
         working-directory: frontend
         run: |
           npm ci
           npm run build
 
-      - name: Wails Doctor
+      - name: Wails Doctor (可选)
         run: wails doctor
         continue-on-error: true
 
-      - name: Build application
-        run: wails build ${{ matrix.build_flags }} -o BIP39Recovery-${{ matrix.short }}
+      - name: 构建 Linux 应用
+        run: wails build -clean -o BIP39Recovery-linux
 
-      - name: List build artifacts
-        run: ls -R build/bin/
-        shell: bash
-        continue-on-error: true
+      - name: 创建 Linux 压缩包
+        run: |
+          cd build/bin
+          tar -czf ../../BIP39Recovery-linux.tar.gz *
 
-      - name: Upload artifacts
+      - name: 上传 Linux 构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: BIP39Recovery-${{ matrix.short }}
-          path: build/bin/**
-          if-no-files-found: error
-          retention-days: 30
+          name: linux-build
+          path: BIP39Recovery-linux.tar.gz
+          retention-days: 5
+
+  # ==========================================================
+  # Windows 构建任务
+  # ==========================================================
+  build-windows:
+    name: 构建 Windows
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 设置 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装 UPX 和 NSIS
+        run: choco install upx nsis -y
+
+      - name: 添加 GOPATH/bin 到 PATH
+        run: echo "$(go env GOPATH)/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: powershell
+
+      - name: 安装 Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: 构建前端
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Wails Doctor (可选)
+        run: wails doctor
+        continue-on-error: true
+
+      - name: 构建 Windows 应用
+        run: wails build -clean -upx -nsis -o BIP39Recovery-windows.exe
+
+      - name: 重命名构建产物
+        shell: powershell
+        run: |
+          cd build/bin
+          if (Test-Path "BIP39Recovery-windows-amd64-installer.exe") {
+            Rename-Item "BIP39Recovery-windows-amd64-installer.exe" "BIP39Recovery-windows-installer.exe"
+          }
+
+      - name: 上传 Windows 可执行文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: build/bin/BIP39Recovery-windows.exe
+          retention-days: 5
+
+      - name: 上传 Windows 安装程序
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: build/bin/BIP39Recovery-windows-installer.exe
+          retention-days: 5
+        continue-on-error: true
+
+  # ==========================================================
+  # macOS 构建任务
+  # ==========================================================
+  build-macos:
+    name: 构建 macOS
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 设置 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 添加 GOPATH/bin 到 PATH
+        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: 安装 Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: 构建前端
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Wails Doctor (可选)
+        run: wails doctor
+        continue-on-error: true
+
+      - name: 构建 macOS 应用
+        run: wails build -clean -o BIP39Recovery-macos
+
+      - name: 创建 macOS 压缩包
+        run: |
+          cd build/bin
+          if [ -d "BIP39Recovery-macos.app" ]; then
+            zip -r ../../BIP39Recovery-macos.zip BIP39Recovery-macos.app
+          else
+            zip -r ../../BIP39Recovery-macos.zip *
+          fi
+
+      - name: 上传 macOS 构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: BIP39Recovery-macos.zip
+          retention-days: 5
+
+  # ==========================================================
+  # 创建 Release
+  # ==========================================================
+  create-release:
+    name: 创建发布版本
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: 自动增加版本号
+        id: version_bumper
+        run: |
+          # 从 frontend/package.json 读取当前版本
+          if [ -f "frontend/package.json" ]; then
+            current_version=$(node -p "require('./frontend/package.json').version" 2>/dev/null || echo "1.0.0")
+          else
+            current_version="1.0.0"
+          fi
+
+          # 解析版本号
+          major=$(echo $current_version | cut -d'.' -f1)
+          minor=$(echo $current_version | cut -d'.' -f2)
+          patch=$(echo $current_version | cut -d'.' -f3)
+          new_patch=$((patch + 1))
+
+          new_version="$major.$minor.$new_patch"
+          echo "旧版本: $current_version"
+          echo "新版本: $new_version"
+
+          # 更新 frontend/package.json 版本号
+          if [ -f "frontend/package.json" ]; then
+            cd frontend
+            npm version $new_version --no-git-tag-version --allow-same-version
+            cd ..
+          fi
+
+          echo "APP_VERSION=$new_version" >> $GITHUB_ENV
+          echo "new_tag=v$new_version" >> $GITHUB_OUTPUT
+
+      - name: 提交并推送版本更新
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add frontend/package.json
+          if git diff --staged --quiet; then
+            echo "版本号未更改，无需提交。"
+          else
+            git commit -m "chore: 自动增加版本至 ${{ env.APP_VERSION }} [skip ci]"
+            git push
+            echo "已成功推送版本更新。"
+          fi
+
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 列出下载的文件 (调试用)
+        run: find artifacts -type f -ls
+
+      - name: 检查是否已存在该版本的 release
+        id: check_release
+        run: |
+          if gh release view "${{ steps.version_bumper.outputs.new_tag }}" >/dev/null 2>&1; then
+            echo "Release ${{ steps.version_bumper.outputs.new_tag }} 已存在，跳过..."
+            echo "skip_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "Release ${{ steps.version_bumper.outputs.new_tag }} 不存在，继续..."
+            echo "skip_release=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 获取上一个 release 标签
+        id: get_previous_tag
+        if: steps.check_release.outputs.skip_release == 'false'
+        run: |
+          PREVIOUS_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+          if [ -z "$PREVIOUS_TAG" ]; then
+            PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+          echo "PREVIOUS_TAG=$PREVIOUS_TAG" >> $GITHUB_ENV
+          echo "上一个标签: $PREVIOUS_TAG"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成更新日志
+        id: generate_changelog
+        if: steps.check_release.outputs.skip_release == 'false'
+        run: |
+          echo "## 🚀 BIP39 Recovery Tool - 更新内容" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+          echo "### ✨ 新功能" >> CHANGELOG.md
+          git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="feat\|add\|new" --grep="功能\|新增" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无新功能更新" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+          echo "### 🐛 错误修复" >> CHANGELOG.md
+          git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="fix\|bug" --grep="修复\|修正" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无错误修复" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+          echo "### 📦 下载说明" >> CHANGELOG.md
+          echo "- **Windows**: 下载 \`BIP39Recovery-windows-installer.exe\` (安装程序) 或 \`BIP39Recovery-windows.exe\` (独立可执行文件)" >> CHANGELOG.md
+          echo "- **macOS**: 下载 \`BIP39Recovery-macos.zip\`，解压后运行" >> CHANGELOG.md
+          echo "- **Linux**: 下载 \`BIP39Recovery-linux.tar.gz\`，解压后运行" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+          echo "---" >> CHANGELOG.md
+          echo "**构建信息:**" >> CHANGELOG.md
+          echo "- 构建时间: $(date '+%Y-%m-%d %H:%M:%S UTC')" >> CHANGELOG.md
+          echo "- Commit: $(git rev-parse --short HEAD)" >> CHANGELOG.md
+          echo "- Wails 版本: v2.10.2" >> CHANGELOG.md
+
+          cat CHANGELOG.md
+
+      - name: 创建并上传发行版
+        if: steps.check_release.outputs.skip_release == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version_bumper.outputs.new_tag }}
+          name: BIP39 Recovery Tool ${{ env.APP_VERSION }}
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/linux-build/BIP39Recovery-linux.tar.gz
+            artifacts/windows-exe/BIP39Recovery-windows.exe
+            artifacts/windows-installer/BIP39Recovery-windows-installer.exe
+            artifacts/macos-build/BIP39Recovery-macos.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 发布成功通知
+        if: steps.check_release.outputs.skip_release == 'false'
+        run: |
+          echo "🎉 Release ${{ env.APP_VERSION }} 创建成功!"
+          echo "🔗 查看发布: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version_bumper.outputs.new_tag }}"
+          echo ""
+          echo "📦 发布内容:"
+          echo "  ✅ Linux:   BIP39Recovery-linux.tar.gz"
+          echo "  ✅ Windows: BIP39Recovery-windows.exe + 安装程序"
+          echo "  ✅ macOS:   BIP39Recovery-macos.zip"
