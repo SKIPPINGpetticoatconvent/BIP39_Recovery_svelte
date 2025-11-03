@@ -1,16 +1,200 @@
-# README
+# BIP39 Recovery Tool (Svelte Desktop App)
 
-## About
+一个离线的BIP39助记词恢复桌面应用程序，使用Go和Wails框架构建的前后端架构，前端采用Svelte。
 
-This is the official Wails Svelte-TS template.
+## 📋 项目概述
 
-## Live Development
+本项目是一个用于恢复BIP39助记词的桌面应用程序。当您忘记了部分助记词时，可以通过输入您记得的数字来恢复完整的种子短语。
 
-To run in live development mode, run `wails dev` in the project directory. This will run a Vite development
-server that will provide very fast hot reload of your frontend changes. If you want to develop in a browser
-and have access to your Go methods, there is also a dev server that runs on http://localhost:34115. Connect
-to this in your browser, and you can call your Go code from devtools.
+### 主要特性
 
-## Building
+- 🔒 **完全离线** - 无网络连接，100%安全
+- 🖥️ **桌面应用程序** - 基于Wails框架的原生桌面应用
+- 🌍 **多语言支持** - 支持中文和英文
+- 🎨 **现代化UI** - 使用Svelte构建的精美界面
+- 🔄 **实时反馈** - 输入时实时显示恢复进度
 
-To build a redistributable, production mode package, use `wails build`.
+## 🚀 技术栈
+
+### 后端
+
+- **Go 1.23** - 后端编程语言
+- **Wails v2.10.2** - Go + HTML前端构建桌面应用的框架
+- **BIP39标准** - 比特币改进提案39，助记词标准
+
+### 前端
+
+- **Svelte 2** - 现代化的JavaScript框架
+- **TypeScript** - 类型安全的JavaScript开发
+- **Vite** - 快速的构建工具
+- **CSS** - 现代化样式设计
+
+## 📁 项目结构
+
+```
+BIP39_Recovery_svelte/
+├── main.go              # 应用程序入口点
+├── app.go               # 后端业务逻辑
+├── go.mod               # Go模块配置
+├── wails.json           # Wails配置
+├── frontend/            # 前端代码目录
+│   ├── package.json     # Node.js依赖
+│   ├── src/
+│   │   ├── App.svelte   # 主应用组件
+│   │   └── main.ts      # 前端入口点
+│   ├── index.html       # HTML模板
+│   └── wailsjs/         # Wails生成的桥接代码
+├── wordlists/           # 词库文件
+│   └── english.txt      # BIP39英文词库
+├── build/               # 构建配置和资源
+└── README.md            # 项目文档
+```
+
+## 🔧 安装与运行
+
+### 系统要求
+
+- Go 1.23 或更高版本
+- Node.js 16+ 和 npm
+- Windows/macOS/Linux
+
+### 安装步骤
+
+1. **克隆项目**
+
+   ```bash
+   git clone <repository-url>
+   cd BIP39_Recovery_svelte
+   ```
+2. **安装后端依赖**
+
+   ```bash
+   go mod download
+   ```
+3. **安装前端依赖**
+
+   ```bash
+   cd frontend
+   npm install
+   cd ..
+   ```
+4. **运行开发版本**
+
+   ```bash
+   wails dev
+   ```
+5. **构建生产版本**
+
+   ```bash
+   wails build
+   ```
+
+## 💡 使用方法
+
+### BIP39恢复原理
+
+BIP39助记词基于一个数学原理：每个单词对应一个索引（0-2047），通过对数字求和来恢复对应的单词。
+
+**恢复算法：**
+
+1. 输入您记得的2的幂次方数字（1, 2, 4, 8, ..., 1024）
+2. 求和所有输入的数字
+3. 总和 +1 = 单词在词库中的索引
+4. 从词库中取出对应的单词
+
+### 操作步骤
+
+1. **选择助记词长度** - 12、18或24个单词
+2. **输入数字** - 为每个单词输入您记得的数字
+3. **验证输入** - 系统会验证数字是否为有效的2的幂
+4. **确认单词** - 系统显示恢复的单词
+5. **重复过程** - 继续下一个单词直到完成
+
+### 界面说明
+
+- **欢迎页面** - 选择助记词长度
+- **恢复页面** - 逐个恢复单词
+- **结果页面** - 显示完整的种子短语
+
+## 🔐 安全特性
+
+- **完全离线运行** - 无网络依赖，无数据上传
+- **本地词库** - 词库文件存储在本地
+- **无数据持久化** - 应用程序关闭后不保存任何输入数据
+- **开源透明** - 代码完全开源，可审计安全性
+
+## 🌐 多语言支持
+
+目前支持以下语言：
+
+- **中文 (zh)** - 默认语言
+- **English (en)** - 英文支持
+
+可以通过右上角的语言切换按钮切换语言。
+
+## 🛠️ 开发说明
+
+### 后端开发
+
+后端主要逻辑在 `app.go` 中：
+
+- `InitBIP39()` - 初始化BIP39逻辑和词库
+- `GetWord(index)` - 根据索引获取单词
+- `IsValidNumber(num)` - 验证数字是否为有效2的幂
+- `CalculateWordIndex(sum)` - 计算单词索引
+- `ValidateWordIndex(index)` - 验证索引范围
+
+### 前端开发
+
+前端使用Svelte框架，核心文件 `App.svelte` 包含：
+
+- 用户界面组件
+- 状态管理
+- 与后端Go代码的交互
+- 多语言支持
+
+### 词库文件
+
+- 位置：`wordlists/english.txt`
+- 格式：每行一个单词，共2048个单词
+- 标准：符合BIP39规范的英文词库
+
+## 📦 构建说明
+
+### 开发环境
+
+```bash
+wails dev
+```
+
+### 生产构建
+
+```bash
+wails build
+```
+
+构建产物位于 `build/bin/` 目录下。
+
+### 平台支持
+
+通过Wails框架支持多个平台：
+
+- Windows (.exe)
+- macOS (.app)
+- Linux (.AppImage)
+
+## 🤝 贡献
+
+欢迎提交Issue和Pull Request来改进这个项目！
+
+## 📄 许可证
+
+本项目采用开源许可证，具体请查看LICENSE文件。
+
+## ⚠️ 免责声明
+
+本工具仅用于教育和安全恢复目的。请妥善保管您的助记词，不要在不安全的环境中使用。作者不对使用本工具产生的任何损失承担责任。
+
+---
+
+**安全提示：** 在备份完您的种子短语后，请立即关闭应用程序窗口。
