@@ -1,0 +1,13 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "BIP39_Recovery_svelte",
+  "outputfilename": "BIP39_Recovery_svelte",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "ftdrtd",
+    "email": "146918156+SKIPPINGpetticoatconvent@users.noreply.github.com"
+  }
+}
