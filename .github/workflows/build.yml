@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-20.04 # 使用 20.04 确保兼容性
+          - os: ubuntu-20.04
             short: linux
           - os: windows-latest
             short: windows
@@ -49,6 +49,16 @@ jobs:
             build-essential \
             pkg-config
 
+      - name: Install UPX (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install upx -y
+
+      - name: Install NSIS (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install nsis -y
+
       - name: Add GOPATH/bin to PATH
         run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
         shell: bash
@@ -66,9 +76,19 @@ jobs:
         run: wails doctor
         continue-on-error: true
 
-      - name: Build app
+      - name: Build app (Linux/macOS)
+        if: runner.os != 'Windows'
         run: |
           wails build -clean -o BIP39Recovery-${{ matrix.short }}
+
+      - name: Build app (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          wails build -clean -upx -nsis -o BIP39Recovery-${{ matrix.short }}.exe
+
+      - name: List build artifacts
+        run: ls -R build/bin/
+        shell: bash
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
