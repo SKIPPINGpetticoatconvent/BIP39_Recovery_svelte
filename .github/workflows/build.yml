@@ -1,20 +1,13 @@
 name: Build and Release (Windows + macOS + Linux)
 
-# ==========================================================
-# 权限声明
-# ==========================================================
 permissions:
-  contents: write # 授予 GITHUB_TOKEN 对仓库内容的写权限，以便推送版本更新和创建 Release
+  contents: write
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
   pull_request:
-    branches:
-      - main
-      - master
+    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -30,16 +23,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ✅ 缓存 Go 模块
+      - name: 缓存 Go 模块
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
       - name: 设置 Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
           cache: true
 
+      # ✅ Node.js 始终使用最新 LTS 版本
       - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "lts/*"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
@@ -95,16 +99,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ✅ 缓存 Go 模块
+      - name: 缓存 Go 模块
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
       - name: 设置 Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
           cache: true
 
+      # ✅ Node.js 使用 LTS
       - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "lts/*"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
@@ -166,16 +181,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ✅ 缓存 Go 模块
+      - name: 缓存 Go 模块
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
       - name: 设置 Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
           cache: true
 
+      # ✅ Node.js 使用 LTS
       - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "lts/*"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
@@ -196,6 +222,8 @@ jobs:
         continue-on-error: true
 
       - name: 构建 macOS 应用
+        env:
+          CGO_ENABLED: 1
         run: wails build -clean -o BIP39Recovery-macos
 
       - name: 创建 macOS 压缩包
@@ -222,6 +250,9 @@ jobs:
     needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    concurrency:
+      group: "release-${{ github.ref }}"
+      cancel-in-progress: true
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -231,35 +262,28 @@ jobs:
       - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "lts/*"
 
       - name: 自动增加版本号
         id: version_bumper
         run: |
-          # 从 frontend/package.json 读取当前版本
           if [ -f "frontend/package.json" ]; then
             current_version=$(node -p "require('./frontend/package.json').version" 2>/dev/null || echo "1.0.0")
           else
             current_version="1.0.0"
           fi
-
-          # 解析版本号
           major=$(echo $current_version | cut -d'.' -f1)
           minor=$(echo $current_version | cut -d'.' -f2)
           patch=$(echo $current_version | cut -d'.' -f3)
           new_patch=$((patch + 1))
-
           new_version="$major.$minor.$new_patch"
           echo "旧版本: $current_version"
           echo "新版本: $new_version"
-
-          # 更新 frontend/package.json 版本号
           if [ -f "frontend/package.json" ]; then
             cd frontend
             npm version $new_version --no-git-tag-version --allow-same-version
             cd ..
           fi
-
           echo "APP_VERSION=$new_version" >> $GITHUB_ENV
           echo "new_tag=v$new_version" >> $GITHUB_OUTPUT
 
@@ -273,7 +297,6 @@ jobs:
           else
             git commit -m "chore: 自动增加版本至 ${{ env.APP_VERSION }} [skip ci]"
             git push
-            echo "已成功推送版本更新。"
           fi
 
       - name: 下载所有构建产物
@@ -281,17 +304,12 @@ jobs:
         with:
           path: artifacts
 
-      - name: 列出下载的文件 (调试用)
-        run: find artifacts -type f -ls
-
-      - name: 检查是否已存在该版本的 release
+      - name: 检查 Release 是否已存在
         id: check_release
         run: |
           if gh release view "${{ steps.version_bumper.outputs.new_tag }}" >/dev/null 2>&1; then
-            echo "Release ${{ steps.version_bumper.outputs.new_tag }} 已存在，跳过..."
             echo "skip_release=true" >> $GITHUB_OUTPUT
           else
-            echo "Release ${{ steps.version_bumper.outputs.new_tag }} 不存在，继续..."
             echo "skip_release=false" >> $GITHUB_OUTPUT
           fi
         env:
@@ -306,7 +324,6 @@ jobs:
             PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)
           fi
           echo "PREVIOUS_TAG=$PREVIOUS_TAG" >> $GITHUB_ENV
-          echo "上一个标签: $PREVIOUS_TAG"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -316,28 +333,19 @@ jobs:
         run: |
           echo "## 🚀 BIP39 Recovery Tool - 更新内容" > CHANGELOG.md
           echo "" >> CHANGELOG.md
-
           echo "### ✨ 新功能" >> CHANGELOG.md
-          git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="feat\|add\|new" --grep="功能\|新增" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无新功能更新" >> CHANGELOG.md
+          git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="feat\|add\|new" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无新功能更新" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
-
           echo "### 🐛 错误修复" >> CHANGELOG.md
-          git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="fix\|bug" --grep="修复\|修正" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无错误修复" >> CHANGELOG.md
+          git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="fix\|bug" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无错误修复" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
-
+          echo "### ⚙️ 其他改进" >> CHANGELOG.md
+          git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="chore\|refactor\|perf\|optimize" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无其他改进" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
           echo "### 📦 下载说明" >> CHANGELOG.md
-          echo "- **Windows**: 下载 \`BIP39Recovery-windows-installer.exe\` (安装程序) 或 \`BIP39Recovery-windows.exe\` (独立可执行文件)" >> CHANGELOG.md
-          echo "- **macOS**: 下载 \`BIP39Recovery-macos.zip\`，解压后运行" >> CHANGELOG.md
-          echo "- **Linux**: 下载 \`BIP39Recovery-linux.tar.gz\`，解压后运行" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-
-          echo "---" >> CHANGELOG.md
-          echo "**构建信息:**" >> CHANGELOG.md
-          echo "- 构建时间: $(date '+%Y-%m-%d %H:%M:%S UTC')" >> CHANGELOG.md
-          echo "- Commit: $(git rev-parse --short HEAD)" >> CHANGELOG.md
-          echo "- Wails 版本: v2.10.2" >> CHANGELOG.md
-
-          cat CHANGELOG.md
+          echo "- **Windows**: \`BIP39Recovery-windows-installer.exe\` 或 \`BIP39Recovery-windows.exe\`" >> CHANGELOG.md
+          echo "- **macOS**: \`BIP39Recovery-macos.zip\`" >> CHANGELOG.md
+          echo "- **Linux**: \`BIP39Recovery-linux.tar.gz\`" >> CHANGELOG.md
 
       - name: 创建并上传发行版
         if: steps.check_release.outputs.skip_release == 'false'
@@ -346,8 +354,6 @@ jobs:
           tag_name: ${{ steps.version_bumper.outputs.new_tag }}
           name: BIP39 Recovery Tool ${{ env.APP_VERSION }}
           body_path: CHANGELOG.md
-          draft: false
-          prerelease: false
           files: |
             artifacts/linux-build/BIP39Recovery-linux.tar.gz
             artifacts/windows-exe/BIP39Recovery-windows.exe
@@ -355,14 +361,3 @@ jobs:
             artifacts/macos-build/BIP39Recovery-macos.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 发布成功通知
-        if: steps.check_release.outputs.skip_release == 'false'
-        run: |
-          echo "🎉 Release ${{ env.APP_VERSION }} 创建成功!"
-          echo "🔗 查看发布: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version_bumper.outputs.new_tag }}"
-          echo ""
-          echo "📦 发布内容:"
-          echo "  ✅ Linux:   BIP39Recovery-linux.tar.gz"
-          echo "  ✅ Windows: BIP39Recovery-windows.exe + 安装程序"
-          echo "  ✅ macOS:   BIP39Recovery-macos.zip"
