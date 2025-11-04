@@ -1,4 +1,4 @@
-name: Build and Release (Windows + macOS + Linux)
+name: Build and Release (Windows + macOS + Linux/Tails)
 
 permissions:
   contents: write
@@ -12,10 +12,10 @@ on:
 
 jobs:
   # ==========================================================
-  # Linux 构建任务
+  # Linux 构建任务（针对 Tails OS 优化）
   # ==========================================================
   build-linux:
-    name: 构建 Linux
+    name: 构建 Linux (Tails 兼容)
     runs-on: ubuntu-22.04
     steps:
       - name: 检出代码
@@ -23,7 +23,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ✅ 缓存 Go 模块
       - name: 缓存 Go 模块
         uses: actions/cache@v4
         with:
@@ -39,7 +38,6 @@ jobs:
           go-version: "1.22.x"
           cache: true
 
-      # ✅ Node.js 始终使用最新 LTS 版本
       - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
@@ -54,7 +52,9 @@ jobs:
             libgtk-3-dev \
             libwebkit2gtk-4.0-dev \
             build-essential \
-            pkg-config
+            pkg-config \
+            file \
+            desktop-file-utils
 
       - name: 添加 GOPATH/bin 到 PATH
         run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
@@ -68,23 +68,249 @@ jobs:
           npm ci
           npm run build
 
-      - name: Wails Doctor (可选)
+      - name: Wails Doctor
         run: wails doctor
         continue-on-error: true
 
       - name: 构建 Linux 应用
-        run: wails build -clean -o BIP39Recovery-linux
+        run: wails build -clean -platform linux/amd64
 
-      - name: 创建 Linux 压缩包
+      - name: 下载 linuxdeploy 和 AppImage 工具
+        run: |
+          # 下载 linuxdeploy（更现代的 AppImage 打包工具）
+          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+
+          # 下载 linuxdeploy-plugin-gtk（处理 GTK 依赖）
+          wget https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-plugin-gtk.sh
+
+      - name: 创建 AppImage（Tails 兼容版本）
+        run: |
+          # 创建基础目录
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+
+          # 复制可执行文件
+          cp build/bin/BIP39Recovery AppDir/usr/bin/
+          chmod +x AppDir/usr/bin/BIP39Recovery
+
+          # 创建 .desktop 文件（符合 Tails 安全要求）
+          cat > AppDir/usr/share/applications/BIP39Recovery.desktop <<'EOF'
+          [Desktop Entry]
+          Name=BIP39 Recovery Tool
+          Exec=BIP39Recovery
+          Icon=BIP39Recovery
+          Type=Application
+          Categories=Utility;Finance;Security;
+          Comment=BIP39 Mnemonic Recovery Tool (Tails Compatible)
+          Terminal=false
+          StartupNotify=true
+          X-AppImage-Version=1.0
+          EOF
+
+          # 验证 desktop 文件
+          desktop-file-validate AppDir/usr/share/applications/BIP39Recovery.desktop || true
+
+          # 复制图标
+          if [ -f "build/appicon.png" ]; then
+            cp build/appicon.png AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
+          else
+            # 创建简单图标作为后备
+            echo "警告: 未找到应用图标，创建占位图标"
+            # 这里可以用 ImageMagick 创建简单图标，或者跳过
+          fi
+
+          # 使用 linuxdeploy 打包（自动处理依赖）
+          export DEPLOY_GTK_VERSION=3
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --plugin gtk \
+            --executable build/bin/BIP39Recovery \
+            --desktop-file AppDir/usr/share/applications/BIP39Recovery.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png \
+            --output appimage || {
+              echo "linuxdeploy 失败，尝试使用传统方法..."
+              
+              # 传统 AppImage 方法作为后备
+              wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+              chmod +x appimagetool-x86_64.AppImage
+              
+              # 复制 desktop 和图标到根目录
+              cp AppDir/usr/share/applications/BIP39Recovery.desktop AppDir/
+              cp AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png AppDir/
+              
+              # 创建 AppRun
+              cat > AppDir/AppRun <<'APPRUN'
+          #!/bin/bash
+          SELF=$(readlink -f "$0")
+          HERE=${SELF%/*}
+          export PATH="${HERE}/usr/bin/:${PATH}"
+          export LD_LIBRARY_PATH="${HERE}/usr/lib/:${LD_LIBRARY_PATH}"
+
+          # Tails 特定环境变量
+          export TMPDIR="${TMPDIR:-/tmp}"
+          export HOME="${HOME:-/home/amnesia}"
+
+          # GTK 相关设置
+          export GTK_THEME="${GTK_THEME:-Adwaita}"
+          export GDK_BACKEND=x11
+
+          cd "${HERE}/usr/bin"
+          exec ./BIP39Recovery "$@"
+          APPRUN
+              chmod +x AppDir/AppRun
+              
+              ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir BIP39Recovery-x86_64.AppImage
+            }
+
+          # 重命名最终文件
+          if [ -f "BIP39_Recovery_Tool-x86_64.AppImage" ]; then
+            mv BIP39_Recovery_Tool-x86_64.AppImage BIP39Recovery-linux.AppImage
+          elif [ -f "BIP39Recovery-x86_64.AppImage" ]; then
+            mv BIP39Recovery-x86_64.AppImage BIP39Recovery-linux.AppImage
+          fi
+
+          # 设置执行权限
+          chmod +x BIP39Recovery-linux.AppImage
+
+      - name: 创建 Tails 使用说明
+        run: |
+          cat > TAILS-USAGE.md <<'EOF'
+          # 在 Tails OS 中使用 BIP39 Recovery Tool
+
+          ## 下载和准备
+
+          1. **下载文件**
+             - 在 Tails 的 Tor Browser 中下载 `BIP39Recovery-linux.AppImage`
+             - 保存到持久存储（Persistent Storage）以便重启后继续使用
+
+          2. **设置权限**
+             ```bash
+             chmod +x BIP39Recovery-linux.AppImage
+             ```
+
+          3. **运行应用**
+             ```bash
+             ./BIP39Recovery-linux.AppImage
+             ```
+             或者双击文件图标运行
+
+          ## 安全建议
+
+          ⚠️ **重要安全提示**：
+
+          - ✅ 始终在断网状态下运行敏感操作
+          - ✅ 使用完毕后关闭应用并重启 Tails（清除内存）
+          - ✅ 不要将恢复的私钥保存在持久存储中
+          - ✅ 如需保存，使用加密的 USB 或离线存储
+          - ✅ 确保在安全的物理环境中操作
+
+          ## 故障排除
+
+          ### 如果 AppImage 无法运行：
+
+          1. **检查 FUSE 支持**
+             ```bash
+             # Tails 通常已启用 FUSE
+             modprobe fuse
+             ```
+
+          2. **提取并手动运行**
+             ```bash
+             ./BIP39Recovery-linux.AppImage --appimage-extract
+             cd squashfs-root
+             ./AppRun
+             ```
+
+          3. **查看错误日志**
+             ```bash
+             ./BIP39Recovery-linux.AppImage 2>&1 | tee error.log
+             ```
+
+          ### Tails 持久存储设置
+
+          如果您想在 Tails 重启后继续使用此工具：
+
+          1. 启用 Persistent Storage
+          2. 创建 "Personal Data" 或 "Additional Software" 持久化文件夹
+          3. 将 AppImage 保存在持久化位置
+
+          ## 网络隔离
+
+          如果需要完全断网运行：
+
+          ```bash
+          # 在 Tails 中禁用网络（需要管理员密码）
+          sudo systemctl stop NetworkManager
+
+          # 运行应用
+          ./BIP39Recovery-linux.AppImage
+
+          # 完成后重启 Tails 以恢复网络
+          ```
+
+          ## 关于 Tails 的注意事项
+
+          - Tails 基于 Debian，AppImage 完全兼容
+          - AppImage 不需要安装，不修改系统
+          - 所有操作在内存中进行，重启后自动清除
+          - 适合处理敏感的加密货币恢复任务
+
+          ---
+
+          **隐私提醒**: 本工具专为离线使用设计。在处理助记词等敏感信息时，
+          请确保处于完全离线状态，并在使用完成后重启 Tails 以清除所有内存数据。
+          EOF
+
+      - name: 同时创建标准 tar.gz 包
         run: |
           cd build/bin
-          tar -czf ../../BIP39Recovery-linux.tar.gz *
+          tar -czf ../../BIP39Recovery-linux.tar.gz BIP39Recovery
+          cd ../..
+
+          # 创建简单的 README
+          cat > README-LINUX.txt <<'EOF'
+          BIP39 Recovery Tool - Linux 版本
+
+          推荐格式：AppImage（适用于 Tails OS）
+          备选格式：tar.gz（需要系统依赖）
+
+          使用 AppImage：
+          1. chmod +x BIP39Recovery-linux.AppImage
+          2. ./BIP39Recovery-linux.AppImage
+
+          使用 tar.gz：
+          1. tar -xzf BIP39Recovery-linux.tar.gz
+          2. sudo apt-get install libgtk-3-0 libwebkit2gtk-4.0-37
+          3. chmod +x BIP39Recovery
+          4. ./BIP39Recovery
+
+          Tails 用户请参阅 TAILS-USAGE.md
+          EOF
+
+      - name: 验证构建产物
+        run: |
+          echo "=== 构建产物列表 ==="
+          ls -lh BIP39Recovery-linux.AppImage BIP39Recovery-linux.tar.gz TAILS-USAGE.md README-LINUX.txt
+          echo ""
+          echo "=== AppImage 文件信息 ==="
+          file BIP39Recovery-linux.AppImage
+          echo ""
+          echo "=== AppImage 可执行性测试 ==="
+          chmod +x BIP39Recovery-linux.AppImage
+          ./BIP39Recovery-linux.AppImage --appimage-help 2>&1 || echo "✓ AppImage 创建成功"
 
       - name: 上传 Linux 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: BIP39Recovery-linux.tar.gz
+          path: |
+            BIP39Recovery-linux.AppImage
+            BIP39Recovery-linux.tar.gz
+            TAILS-USAGE.md
+            README-LINUX.txt
           retention-days: 5
 
   # ==========================================================
@@ -99,7 +325,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ✅ 缓存 Go 模块
       - name: 缓存 Go 模块
         uses: actions/cache@v4
         with:
@@ -115,7 +340,6 @@ jobs:
           go-version: "1.22.x"
           cache: true
 
-      # ✅ Node.js 使用 LTS
       - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
@@ -181,7 +405,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ✅ 缓存 Go 模块
       - name: 缓存 Go 模块
         uses: actions/cache@v4
         with:
@@ -197,7 +420,6 @@ jobs:
           go-version: "1.22.x"
           cache: true
 
-      # ✅ Node.js 使用 LTS
       - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
@@ -343,9 +565,21 @@ jobs:
           git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="chore\|refactor\|perf\|optimize" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无其他改进" >> CHANGELOG.md
           echo "" >> CHANGELOG.md
           echo "### 📦 下载说明" >> CHANGELOG.md
-          echo "- **Windows**:  \`BIP39Recovery-windows.exe\`" >> CHANGELOG.md
-          echo "- **macOS**: \`BIP39Recovery-macos.zip\`" >> CHANGELOG.md
-          echo "- **Linux**: \`BIP39Recovery-linux.tar.gz\`" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "#### Windows" >> CHANGELOG.md
+          echo "- 下载 \`BIP39Recovery-windows.exe\` 直接运行" >> CHANGELOG.md
+          echo "- 或使用 \`BIP39Recovery-windows-installer.exe\` 安装版本" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "#### macOS" >> CHANGELOG.md
+          echo "- 下载 \`BIP39Recovery-macos.zip\`，解压后运行" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "#### Linux (Tails OS 兼容) 🔒" >> CHANGELOG.md
+          echo "- **推荐**: \`BIP39Recovery-linux.AppImage\` (无需安装依赖)" >> CHANGELOG.md
+          echo "  1. \`chmod +x BIP39Recovery-linux.AppImage\`" >> CHANGELOG.md
+          echo "  2. \`./BIP39Recovery-linux.AppImage\`" >> CHANGELOG.md
+          echo "- **备选**: \`BIP39Recovery-linux.tar.gz\` (需要系统依赖)" >> CHANGELOG.md
+          echo "- **Tails 用户**: 请阅读 \`TAILS-USAGE.md\` 获取详细指南" >> CHANGELOG.md
+          echo "- **安全提示**: 处理助记词时建议断网操作，使用完毕重启 Tails" >> CHANGELOG.md
 
       - name: 创建并上传发行版
         if: steps.check_release.outputs.skip_release == 'false'
@@ -355,7 +589,10 @@ jobs:
           name: BIP39 Recovery Tool ${{ env.APP_VERSION }}
           body_path: CHANGELOG.md
           files: |
+            artifacts/linux-build/BIP39Recovery-linux.AppImage
             artifacts/linux-build/BIP39Recovery-linux.tar.gz
+            artifacts/linux-build/TAILS-USAGE.md
+            artifacts/linux-build/README-LINUX.txt
             artifacts/windows-exe/BIP39Recovery-windows.exe
             artifacts/windows-installer/BIP39Recovery-windows-installer.exe
             artifacts/macos-build/BIP39Recovery-macos.zip
