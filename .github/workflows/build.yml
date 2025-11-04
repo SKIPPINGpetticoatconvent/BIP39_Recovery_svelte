@@ -12,10 +12,10 @@ on:
 
 jobs:
   # ==========================================================
-  # Linux 构建任务（针对 Tails OS 优化）
+  # Linux 构建任务（Tails 离线兼容 + 静态封装 WebKitGTK）
   # ==========================================================
   build-linux:
-    name: 构建 Linux (Tails 兼容)
+    name: 构建 Linux (Tails 离线兼容)
     runs-on: ubuntu-22.04
     steps:
       - name: 检出代码
@@ -45,7 +45,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
-      - name: 安装系统依赖
+      - name: 安装系统依赖（含 WebKitGTK）
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -54,7 +54,9 @@ jobs:
             build-essential \
             pkg-config \
             file \
-            desktop-file-utils
+            appimagetool \
+            desktop-file-utils \
+            gir1.2-webkit2-4.0
 
       - name: 添加 GOPATH/bin 到 PATH
         run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
@@ -68,278 +70,112 @@ jobs:
           npm ci
           npm run build
 
-      - name: Wails Doctor
-        run: wails doctor
-        continue-on-error: true
-
-      - name: 构建 Linux 应用
-        run: wails build -clean -platform linux/amd64
-
-      - name: 调试 - 查看构建产物
+      - name: 构建 Wails 可执行文件
         run: |
-          echo "=== 检查 build 目录结构 ==="
-          ls -R build/
-          echo ""
-          echo "=== 查找可执行文件 ==="
-          find build -type f -executable -ls
-
-      - name: 安装 FUSE 和下载 AppImage 工具
-        run: |
-          # 安装 FUSE
-          sudo apt-get install -y fuse libfuse2
-
-          # 下载并提取 appimagetool (避免 FUSE 问题)
-          wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool-x86_64.AppImage
-          ./appimagetool-x86_64.AppImage --appimage-extract
-
-          # 下载 linuxdeploy
-          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage
-          ./linuxdeploy-x86_64.AppImage --appimage-extract
-          mv squashfs-root linuxdeploy-root
-
-          # 下载 linuxdeploy-plugin-gtk
-          wget https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
-          chmod +x linuxdeploy-plugin-gtk.sh
-
-      - name: 创建 AppImage（Tails 兼容版本）
-        run: |
-          # 查找实际的可执行文件
-          BINARY_PATH=$(find build/bin -type f -executable | head -n 1)
-
-          if [ -z "$BINARY_PATH" ]; then
-            echo "错误: 找不到可执行文件"
-            echo "build/bin 目录内容:"
-            ls -la build/bin/
-            exit 1
-          fi
-
-          echo "找到可执行文件: $BINARY_PATH"
-          BINARY_NAME=$(basename "$BINARY_PATH")
-          echo "可执行文件名: $BINARY_NAME"
-
-          # 创建基础目录
+          wails build -clean -platform linux/amd64
           mkdir -p AppDir/usr/bin
-          mkdir -p AppDir/usr/share/applications
-          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-
-          # 复制可执行文件
-          cp "$BINARY_PATH" AppDir/usr/bin/BIP39Recovery
+          cp build/bin/BIP39Recovery AppDir/usr/bin/
           chmod +x AppDir/usr/bin/BIP39Recovery
 
-          # 创建 .desktop 文件（符合 Tails 安全要求）
+      - name: 创建 Desktop 文件与图标
+        run: |
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
           cat > AppDir/usr/share/applications/BIP39Recovery.desktop <<'EOF'
           [Desktop Entry]
           Name=BIP39 Recovery Tool
           Exec=BIP39Recovery
           Icon=BIP39Recovery
           Type=Application
-          Categories=Utility;Finance;Security;
+          Categories=Utility;Security;Finance;
           Comment=BIP39 Mnemonic Recovery Tool (Tails Compatible)
           Terminal=false
           StartupNotify=true
           X-AppImage-Version=1.0
           EOF
-
-          # 验证 desktop 文件
           desktop-file-validate AppDir/usr/share/applications/BIP39Recovery.desktop || true
 
-          # 复制图标
           if [ -f "build/appicon.png" ]; then
             cp build/appicon.png AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
           else
-            # 创建简单图标作为后备
-            echo "警告: 未找到应用图标，创建占位图标"
-            # 这里可以用 ImageMagick 创建简单图标，或者跳过
+            touch AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
           fi
 
-          # 使用 linuxdeploy 打包（自动处理依赖）
-          export DEPLOY_GTK_VERSION=3
-
-          # 使用提取后的 linuxdeploy
-          ./linuxdeploy-root/AppRun \
+      - name: 使用 linuxdeploy 打包 GTK 依赖
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          ./linuxdeploy-x86_64.AppImage --appimage-extract
+          ./squashfs-root/AppRun \
             --appdir AppDir \
             --plugin gtk \
             --executable AppDir/usr/bin/BIP39Recovery \
             --desktop-file AppDir/usr/share/applications/BIP39Recovery.desktop \
-            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png \
-            --output appimage || {
-              echo "linuxdeploy 失败，尝试使用传统方法..."
-              
-              # 传统 AppImage 方法作为后备
-              # 复制 desktop 和图标到根目录
-              cp AppDir/usr/share/applications/BIP39Recovery.desktop AppDir/
-              if [ -f "AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png" ]; then
-                cp AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png AppDir/
-              fi
-              
-              # 创建 AppRun
-              cat > AppDir/AppRun <<'APPRUN'
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
+
+      - name: 静态封装 WebKitGTK 动态库与子进程
+        run: |
+          mkdir -p AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.0
+          sudo cp -a /usr/lib/x86_64-linux-gnu/webkit2gtk-4.0/* AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.0/ 2>/dev/null || true
+          [ -d /usr/libexec/webkit2gtk-4.0 ] && sudo cp -a /usr/libexec/webkit2gtk-4.0/* AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.0/
+          for lib in libwebkit2gtk-4.0 libjavascriptcoregtk-4.0 libgtk-3 libgobject-2.0 libglib-2.0 libpango-1.0 libcairo; do
+            sudo cp -a /usr/lib/x86_64-linux-gnu/${lib}.so* AppDir/usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+          done
+
+      - name: 创建 AppRun（免 FUSE 离线可执行）
+        run: |
+          cat > AppDir/AppRun <<'APPRUN'
           #!/bin/bash
           SELF=$(readlink -f "$0")
           HERE=${SELF%/*}
-          export PATH="${HERE}/usr/bin/:${PATH}"
-          export LD_LIBRARY_PATH="${HERE}/usr/lib/:${LD_LIBRARY_PATH}"
-
-          # Tails 特定环境变量
-          export TMPDIR="${TMPDIR:-/tmp}"
+          export PATH="${HERE}/usr/bin:${PATH}"
+          export LD_LIBRARY_PATH="${HERE}/usr/lib/x86_64-linux-gnu:${HERE}/usr/lib:${LD_LIBRARY_PATH}"
           export HOME="${HOME:-/home/amnesia}"
-
-          # GTK 相关设置
-          export GTK_THEME="${GTK_THEME:-Adwaita}"
+          export TMPDIR="${TMPDIR:-/tmp}"
           export GDK_BACKEND=x11
-
+          export GTK_THEME=Adwaita
+          export WEBKIT_DISABLE_COMPOSITING_MODE=1
           cd "${HERE}/usr/bin"
           exec ./BIP39Recovery "$@"
           APPRUN
-              chmod +x AppDir/AppRun
-              
-              # 使用 extract-and-run 方式运行 appimagetool
-              ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir BIP39Recovery-x86_64.AppImage || \
-              ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir BIP39Recovery-x86_64.AppImage
-            }
+          chmod +x AppDir/AppRun
 
-          # 重命名最终文件
-          if [ -f "BIP39_Recovery_Tool-x86_64.AppImage" ]; then
-            mv BIP39_Recovery_Tool-x86_64.AppImage BIP39Recovery-linux.AppImage
-          elif [ -f "BIP39Recovery-x86_64.AppImage" ]; then
-            mv BIP39Recovery-x86_64.AppImage BIP39Recovery-linux.AppImage
-          fi
-
-          # 设置执行权限
+      - name: 构建 AppImage（不依赖 FUSE）
+        run: |
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          ./appimagetool-x86_64.AppImage --appimage-extract
+          ARCH=x86_64 ./squashfs-root/AppRun AppDir BIP39Recovery-linux.AppImage
           chmod +x BIP39Recovery-linux.AppImage
+
+      - name: 验证 AppImage 自包含性
+        run: |
+          ./BIP39Recovery-linux.AppImage --appimage-extract
+          ldd squashfs-root/usr/bin/BIP39Recovery | grep "not found" || echo "✅ 所有依赖已封装"
+          echo ""
+          echo "=== WebKit 子进程 ==="
+          find squashfs-root/usr/lib/x86_64-linux-gnu/webkit2gtk-4.0/ -type f | head -n 10
 
       - name: 创建 Tails 使用说明
         run: |
           cat > TAILS-USAGE.md <<'EOF'
           # 在 Tails OS 中使用 BIP39 Recovery Tool
-
-          ## 下载和准备
-
-          1. **下载文件**
-             - 在 Tails 的 Tor Browser 中下载 `BIP39Recovery-linux.AppImage`
-             - 保存到持久存储（Persistent Storage）以便重启后继续使用
-
-          2. **设置权限**
-             ```bash
-             chmod +x BIP39Recovery-linux.AppImage
-             ```
-
-          3. **运行应用**
-             ```bash
-             ./BIP39Recovery-linux.AppImage
-             ```
-             或者双击文件图标运行
-
-          ## 安全建议
-
-          ⚠️ **重要安全提示**：
-
-          - ✅ 始终在断网状态下运行敏感操作
-          - ✅ 使用完毕后关闭应用并重启 Tails（清除内存）
-          - ✅ 不要将恢复的私钥保存在持久存储中
-          - ✅ 如需保存，使用加密的 USB 或离线存储
-          - ✅ 确保在安全的物理环境中操作
-
-          ## 故障排除
-
-          ### 如果 AppImage 无法运行：
-
-          1. **检查 FUSE 支持**
-             ```bash
-             # Tails 通常已启用 FUSE
-             modprobe fuse
-             ```
-
-          2. **提取并手动运行**
-             ```bash
-             ./BIP39Recovery-linux.AppImage --appimage-extract
-             cd squashfs-root
-             ./AppRun
-             ```
-
-          3. **查看错误日志**
-             ```bash
-             ./BIP39Recovery-linux.AppImage 2>&1 | tee error.log
-             ```
-
-          ### Tails 持久存储设置
-
-          如果您想在 Tails 重启后继续使用此工具：
-
-          1. 启用 Persistent Storage
-          2. 创建 "Personal Data" 或 "Additional Software" 持久化文件夹
-          3. 将 AppImage 保存在持久化位置
-
-          ## 网络隔离
-
-          如果需要完全断网运行：
-
+          ## 快速开始
           ```bash
-          # 在 Tails 中禁用网络（需要管理员密码）
-          sudo systemctl stop NetworkManager
-
-          # 运行应用
-          ./BIP39Recovery-linux.AppImage
-
-          # 完成后重启 Tails 以恢复网络
-          ```
-
-          ## 关于 Tails 的注意事项
-
-          - Tails 基于 Debian，AppImage 完全兼容
-          - AppImage 不需要安装，不修改系统
-          - 所有操作在内存中进行，重启后自动清除
-          - 适合处理敏感的加密货币恢复任务
-
-          ---
-
-          **隐私提醒**: 本工具专为离线使用设计。在处理助记词等敏感信息时，
-          请确保处于完全离线状态，并在使用完成后重启 Tails 以清除所有内存数据。
-          EOF
-
-      - name: 同时创建标准 tar.gz 包
-        run: |
-          # 查找实际的可执行文件
-          BINARY_PATH=$(find build/bin -type f -executable | head -n 1)
-          BINARY_NAME=$(basename "$BINARY_PATH")
-
-          cd build/bin
-          tar -czf ../../BIP39Recovery-linux.tar.gz "$BINARY_NAME"
-          cd ../..
-
-          # 创建简单的 README
-          cat > README-LINUX.txt <<'EOF'
-          BIP39 Recovery Tool - Linux 版本
-
-          推荐格式：AppImage（适用于 Tails OS）
-          备选格式：tar.gz（需要系统依赖）
-
-          使用 AppImage：
-          1. chmod +x BIP39Recovery-linux.AppImage
-          2. ./BIP39Recovery-linux.AppImage
-
-          使用 tar.gz：
-          1. tar -xzf BIP39Recovery-linux.tar.gz
-          2. sudo apt-get install libgtk-3-0 libwebkit2gtk-4.0-37
-          3. chmod +x BIP39Recovery
-          4. ./BIP39Recovery
-
-          Tails 用户请参阅 TAILS-USAGE.md
-          EOF
-
-      - name: 验证构建产物
-        run: |
-          echo "=== 构建产物列表 ==="
-          ls -lh BIP39Recovery-linux.AppImage BIP39Recovery-linux.tar.gz TAILS-USAGE.md README-LINUX.txt
-          echo ""
-          echo "=== AppImage 文件信息 ==="
-          file BIP39Recovery-linux.AppImage
-          echo ""
-          echo "=== AppImage 可执行性测试 ==="
           chmod +x BIP39Recovery-linux.AppImage
-          ./BIP39Recovery-linux.AppImage --appimage-help 2>&1 || echo "✓ AppImage 创建成功"
+          ./BIP39Recovery-linux.AppImage
+          ```
+          ✅ 无需安装依赖，完全离线运行  
+          ⚠️ 使用完请立即重启 Tails 以清除内存。
+          EOF
+
+      - name: 创建 tar.gz 与 SHA256 校验
+        run: |
+          BINARY_PATH=$(find build/bin -type f -executable | head -n 1)
+          cd build/bin
+          tar -czf ../../BIP39Recovery-linux.tar.gz "$(basename "$BINARY_PATH")"
+          cd ../..
+          sha256sum BIP39Recovery-linux.AppImage BIP39Recovery-linux.tar.gz > SHA256SUMS.txt
 
       - name: 上传 Linux 构建产物
         uses: actions/upload-artifact@v4
@@ -349,8 +185,8 @@ jobs:
             BIP39Recovery-linux.AppImage
             BIP39Recovery-linux.tar.gz
             TAILS-USAGE.md
-            README-LINUX.txt
-          retention-days: 5
+            SHA256SUMS.txt
+          retention-days: 7
 
   # ==========================================================
   # Windows 构建任务
@@ -359,78 +195,36 @@ jobs:
     name: 构建 Windows
     runs-on: windows-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: 缓存 Go 模块
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
-
-      - name: 设置 Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
-          cache: true
-
-      - name: 设置 Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "lts/*"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
-
-      - name: 安装 UPX 和 NSIS
-        run: choco install upx nsis -y
-
-      - name: 添加 GOPATH/bin 到 PATH
-        run: echo "$(go env GOPATH)/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        shell: powershell
-
-      - name: 安装 Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-
-      - name: 构建前端
-        working-directory: frontend
-        run: |
+      - run: choco install upx nsis -y
+      - run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+      - run: |
+          cd frontend
           npm ci
           npm run build
-
-      - name: Wails Doctor (可选)
-        run: wails doctor
-        continue-on-error: true
-
-      - name: 构建 Windows 应用
-        run: wails build -clean -upx -nsis -o BIP39Recovery-windows.exe
-
-      - name: 重命名构建产物
-        shell: powershell
-        run: |
+      - run: wails build -clean -upx -nsis -o BIP39Recovery-windows.exe
+      - run: |
           cd build/bin
           if (Test-Path "BIP39Recovery-windows-amd64-installer.exe") {
             Rename-Item "BIP39Recovery-windows-amd64-installer.exe" "BIP39Recovery-windows-installer.exe"
           }
-
-      - name: 上传 Windows 可执行文件
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: windows-exe
-          path: build/bin/BIP39Recovery-windows.exe
-          retention-days: 5
-
-      - name: 上传 Windows 安装程序
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-installer
-          path: build/bin/BIP39Recovery-windows-installer.exe
-          retention-days: 5
-        continue-on-error: true
+          name: windows-build
+          path: |
+            build/bin/BIP39Recovery-windows.exe
+            build/bin/BIP39Recovery-windows-installer.exe
+          retention-days: 7
 
   # ==========================================================
   # macOS 构建任务
@@ -439,69 +233,31 @@ jobs:
     name: 构建 macOS
     runs-on: macos-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: 缓存 Go 模块
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
-
-      - name: 设置 Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
-          cache: true
-
-      - name: 设置 Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "lts/*"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
-
-      - name: 添加 GOPATH/bin 到 PATH
-        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
-
-      - name: 安装 Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-
-      - name: 构建前端
-        working-directory: frontend
-        run: |
+      - run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+      - run: |
+          cd frontend
           npm ci
           npm run build
-
-      - name: Wails Doctor (可选)
-        run: wails doctor
-        continue-on-error: true
-
-      - name: 构建 macOS 应用
-        env:
-          CGO_ENABLED: 1
-        run: wails build -clean -o BIP39Recovery-macos
-
-      - name: 创建 macOS 压缩包
-        run: |
+      - run: |
+          wails build -clean -o BIP39Recovery-macos
           cd build/bin
-          if [ -d "BIP39Recovery-macos.app" ]; then
-            zip -r ../../BIP39Recovery-macos.zip BIP39Recovery-macos.app
-          else
-            zip -r ../../BIP39Recovery-macos.zip *
-          fi
-
-      - name: 上传 macOS 构建产物
-        uses: actions/upload-artifact@v4
+          zip -r ../../BIP39Recovery-macos.zip *
+      - uses: actions/upload-artifact@v4
         with:
           name: macos-build
           path: BIP39Recovery-macos.zip
-          retention-days: 5
+          retention-days: 7
 
   # ==========================================================
   # 创建 Release
@@ -510,18 +266,12 @@ jobs:
     name: 创建发布版本
     needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    concurrency:
-      group: "release-${{ github.ref }}"
-      cancel-in-progress: true
+    if: github.ref_name == 'main' || github.ref_name == 'master'
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: 设置 Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "lts/*"
 
@@ -529,7 +279,7 @@ jobs:
         id: version_bumper
         run: |
           if [ -f "frontend/package.json" ]; then
-            current_version=$(node -p "require('./frontend/package.json').version" 2>/dev/null || echo "1.0.0")
+            current_version=$(node -p "require('./frontend/package.json').version")
           else
             current_version="1.0.0"
           fi
@@ -538,102 +288,51 @@ jobs:
           patch=$(echo $current_version | cut -d'.' -f3)
           new_patch=$((patch + 1))
           new_version="$major.$minor.$new_patch"
-          echo "旧版本: $current_version"
-          echo "新版本: $new_version"
-          if [ -f "frontend/package.json" ]; then
-            cd frontend
-            npm version $new_version --no-git-tag-version --allow-same-version
-            cd ..
-          fi
           echo "APP_VERSION=$new_version" >> $GITHUB_ENV
           echo "new_tag=v$new_version" >> $GITHUB_OUTPUT
+          cd frontend
+          npm version $new_version --no-git-tag-version
+          cd ..
 
-      - name: 提交并推送版本更新
+      - name: 提交版本号更新
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add frontend/package.json
-          if git diff --staged --quiet; then
-            echo "版本号未更改，无需提交。"
-          else
-            git commit -m "chore: 自动增加版本至 ${{ env.APP_VERSION }} [skip ci]"
-            git push
-          fi
+          git commit -m "chore: 自动增加版本至 ${{ env.APP_VERSION }} [skip ci]" || true
+          git push || true
 
-      - name: 下载所有构建产物
+      - name: 下载构建产物
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: 检查 Release 是否已存在
-        id: check_release
+      - name: 生成更新日志 + 哈希
         run: |
-          if gh release view "${{ steps.version_bumper.outputs.new_tag }}" >/dev/null 2>&1; then
-            echo "skip_release=true" >> $GITHUB_OUTPUT
-          else
-            echo "skip_release=false" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "## 🚀 BIP39 Recovery Tool v${{ env.APP_VERSION }}" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### 📦 下载文件及校验" >> CHANGELOG.md
+          echo '```' >> CHANGELOG.md
+          cat artifacts/linux-build/SHA256SUMS.txt >> CHANGELOG.md
+          echo '```' >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "### 🔒 安全提示" >> CHANGELOG.md
+          echo "- 建议仅在离线（断网）环境中恢复助记词" >> CHANGELOG.md
+          echo "- 使用完毕后重启 Tails 以清除内存" >> CHANGELOG.md
 
-      - name: 获取上一个 release 标签
-        id: get_previous_tag
-        if: steps.check_release.outputs.skip_release == 'false'
-        run: |
-          PREVIOUS_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
-          if [ -z "$PREVIOUS_TAG" ]; then
-            PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)
-          fi
-          echo "PREVIOUS_TAG=$PREVIOUS_TAG" >> $GITHUB_ENV
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 生成更新日志
-        id: generate_changelog
-        if: steps.check_release.outputs.skip_release == 'false'
-        run: |
-          echo "## 🚀 BIP39 Recovery Tool - 更新内容" > CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "### ✨ 新功能" >> CHANGELOG.md
-          git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="feat\|add\|new" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无新功能更新" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "### 🐛 错误修复" >> CHANGELOG.md
-          git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="fix\|bug" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无错误修复" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "### ⚙️ 其他改进" >> CHANGELOG.md
-          git log ${{ env.PREVIOUS_TAG }}..HEAD --oneline --grep="chore\|refactor\|perf\|optimize" | sed 's/^/- /' >> CHANGELOG.md || echo "- 无其他改进" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "### 📦 下载说明" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "#### Windows" >> CHANGELOG.md
-          echo "- 下载 \`BIP39Recovery-windows.exe\` 直接运行" >> CHANGELOG.md
-          echo "- 或使用 \`BIP39Recovery-windows-installer.exe\` 安装版本" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "#### macOS" >> CHANGELOG.md
-          echo "- 下载 \`BIP39Recovery-macos.zip\`，解压后运行" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "#### Linux (Tails OS 兼容) 🔒" >> CHANGELOG.md
-          echo "- **推荐**: \`BIP39Recovery-linux.AppImage\` (无需安装依赖)" >> CHANGELOG.md
-          echo "  1. \`chmod +x BIP39Recovery-linux.AppImage\`" >> CHANGELOG.md
-          echo "  2. \`./BIP39Recovery-linux.AppImage\`" >> CHANGELOG.md
-          echo "- **备选**: \`BIP39Recovery-linux.tar.gz\` (需要系统依赖)" >> CHANGELOG.md
-          echo "- **Tails 用户**: 请阅读 \`TAILS-USAGE.md\` 获取详细指南" >> CHANGELOG.md
-          echo "- **安全提示**: 处理助记词时建议断网操作，使用完毕重启 Tails" >> CHANGELOG.md
-
-      - name: 创建并上传发行版
-        if: steps.check_release.outputs.skip_release == 'false'
+      - name: 发布到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version_bumper.outputs.new_tag }}
-          name: BIP39 Recovery Tool ${{ env.APP_VERSION }}
+          name: "BIP39 Recovery Tool v${{ env.APP_VERSION }}"
           body_path: CHANGELOG.md
           files: |
             artifacts/linux-build/BIP39Recovery-linux.AppImage
             artifacts/linux-build/BIP39Recovery-linux.tar.gz
             artifacts/linux-build/TAILS-USAGE.md
-            artifacts/linux-build/README-LINUX.txt
-            artifacts/windows-exe/BIP39Recovery-windows.exe
-            artifacts/windows-installer/BIP39Recovery-windows-installer.exe
+            artifacts/linux-build/SHA256SUMS.txt
+            artifacts/windows-build/BIP39Recovery-windows.exe
+            artifacts/windows-build/BIP39Recovery-windows-installer.exe
             artifacts/macos-build/BIP39Recovery-macos.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
