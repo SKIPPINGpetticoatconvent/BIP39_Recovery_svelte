@@ -75,6 +75,14 @@ jobs:
       - name: 构建 Linux 应用
         run: wails build -clean -platform linux/amd64
 
+      - name: 调试 - 查看构建产物
+        run: |
+          echo "=== 检查 build 目录结构 ==="
+          ls -R build/
+          echo ""
+          echo "=== 查找可执行文件 ==="
+          find build -type f -executable -ls
+
       - name: 下载 linuxdeploy 和 AppImage 工具
         run: |
           # 下载 linuxdeploy（更现代的 AppImage 打包工具）
@@ -87,13 +95,27 @@ jobs:
 
       - name: 创建 AppImage（Tails 兼容版本）
         run: |
+          # 查找实际的可执行文件
+          BINARY_PATH=$(find build/bin -type f -executable | head -n 1)
+
+          if [ -z "$BINARY_PATH" ]; then
+            echo "错误: 找不到可执行文件"
+            echo "build/bin 目录内容:"
+            ls -la build/bin/
+            exit 1
+          fi
+
+          echo "找到可执行文件: $BINARY_PATH"
+          BINARY_NAME=$(basename "$BINARY_PATH")
+          echo "可执行文件名: $BINARY_NAME"
+
           # 创建基础目录
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
 
           # 复制可执行文件
-          cp build/bin/BIP39Recovery AppDir/usr/bin/
+          cp "$BINARY_PATH" AppDir/usr/bin/BIP39Recovery
           chmod +x AppDir/usr/bin/BIP39Recovery
 
           # 创建 .desktop 文件（符合 Tails 安全要求）
@@ -127,7 +149,7 @@ jobs:
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --plugin gtk \
-            --executable build/bin/BIP39Recovery \
+            --executable AppDir/usr/bin/BIP39Recovery \
             --desktop-file AppDir/usr/share/applications/BIP39Recovery.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png \
             --output appimage || {
@@ -139,7 +161,9 @@ jobs:
               
               # 复制 desktop 和图标到根目录
               cp AppDir/usr/share/applications/BIP39Recovery.desktop AppDir/
-              cp AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png AppDir/
+              if [ -f "AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png" ]; then
+                cp AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png AppDir/
+              fi
               
               # 创建 AppRun
               cat > AppDir/AppRun <<'APPRUN'
@@ -266,8 +290,12 @@ jobs:
 
       - name: 同时创建标准 tar.gz 包
         run: |
+          # 查找实际的可执行文件
+          BINARY_PATH=$(find build/bin -type f -executable | head -n 1)
+          BINARY_NAME=$(basename "$BINARY_PATH")
+
           cd build/bin
-          tar -czf ../../BIP39Recovery-linux.tar.gz BIP39Recovery
+          tar -czf ../../BIP39Recovery-linux.tar.gz "$BINARY_NAME"
           cd ../..
 
           # 创建简单的 README
