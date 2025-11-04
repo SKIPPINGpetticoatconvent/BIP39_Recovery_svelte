@@ -12,7 +12,7 @@ on:
 
 jobs:
   # ==========================================================
-  # Linux 构建任务（Tails 离线兼容 + 静态封装 WebKitGTK）
+  # Linux 构建任务（Tails 离线兼容 + 修正版 GTK 打包）
   # ==========================================================
   build-linux:
     name: 构建 Linux (Tails 离线兼容)
@@ -72,6 +72,7 @@ jobs:
 
       - name: 构建 Wails 可执行文件
         run: |
+          rm -rf AppDir squashfs-root || true
           wails build -clean -platform linux/amd64
           mkdir -p AppDir/usr/bin
           BINARY_PATH=$(find build/bin -maxdepth 1 -type f -executable | head -n 1)
@@ -96,16 +97,15 @@ jobs:
           X-AppImage-Version=1.0
           EOF
           desktop-file-validate AppDir/usr/share/applications/BIP39Recovery.desktop || true
-
           if [ -f "build/appicon.png" ]; then
             cp build/appicon.png AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
           else
             touch AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
           fi
 
-      - name: 使用 linuxdeploy 打包 GTK 依赖（含 GTK 插件）
+      - name: 使用 linuxdeploy 打包 GTK 依赖（修正版）
         run: |
-          # 下载主程序
+          # 下载 linuxdeploy 主程序
           wget -q --retry-connrefused --waitretry=2 --tries=5 \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy-x86_64.AppImage
@@ -116,22 +116,27 @@ jobs:
             https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk.sh
           chmod +x linuxdeploy-plugin-gtk.sh
 
+          # 指定插件路径
+          export PLUGIN_DIR="$PWD"
+
           # 使用 GTK 插件进行打包
           ./squashfs-root/AppRun \
             --appdir AppDir \
-            --plugin gtk \
             --executable AppDir/usr/bin/BIP39Recovery \
             --desktop-file AppDir/usr/share/applications/BIP39Recovery.desktop \
-            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png \
+            --plugin gtk
 
-          # 编译 schema，避免 GTK 设置加载错误
-          glib-compile-schemas AppDir/usr/share/glib-2.0/schemas || true
+          # 编译 schema
+          if [ -d AppDir/usr/share/glib-2.0/schemas ]; then
+            glib-compile-schemas AppDir/usr/share/glib-2.0/schemas
+          fi
 
-      - name: 静态封装 WebKitGTK 动态库与子进程（修正版）
+      - name: 静态封装 WebKitGTK 子进程与依赖
         run: |
           mkdir -p AppDir/usr/libexec/webkit2gtk-4.0
           if [ -d /usr/libexec/webkit2gtk-4.0 ]; then
-            cp -a /usr/libexec/webkit2gtk-4.0/* AppDir/usr/libexec/webkit2gtk-4.0/
+            cp -a /usr/libexec/webkit2gtk-4.0/* AppDir/usr/libexec/webkit2gtk-4.0/ || true
             chmod +x AppDir/usr/libexec/webkit2gtk-4.0/* || true
           fi
 
@@ -140,9 +145,12 @@ jobs:
             cp -a /usr/lib/x86_64-linux-gnu/${lib}.so* AppDir/usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
           done
 
+          # 清理体积
+          find AppDir/usr/lib -type f -name "*.a" -delete || true
+          find AppDir/usr/share/doc -type d -exec rm -rf {} + || true
           find AppDir -type f -executable -exec strip --strip-unneeded {} + 2>/dev/null || true
 
-      - name: 创建 AppRun（修正版：禁用 gvfs + 支持 WebKit 子进程）
+      - name: 创建 AppRun（支持 Tails 离线运行）
         run: |
           cat > AppDir/AppRun <<'APPRUN'
           #!/bin/bash
@@ -154,7 +162,6 @@ jobs:
 
           export GIO_USE_VFS=local
           export GIO_MODULE_DIR="${HERE}/usr/lib/x86_64-linux-gnu/gio/modules"
-
           export XDG_DATA_DIRS="${HERE}/usr/share:$XDG_DATA_DIRS"
           export GSETTINGS_SCHEMA_DIR="${HERE}/usr/share/glib-2.0/schemas"
           export GI_TYPELIB_PATH="${HERE}/usr/lib/girepository-1.0:${GI_TYPELIB_PATH}"
@@ -172,18 +179,18 @@ jobs:
           APPRUN
           chmod +x AppDir/AppRun
 
-      - name: 构建 AppImage（不依赖 FUSE）
+      - name: 构建 AppImage（嵌入版本号 + 不依赖 FUSE）
         run: |
-          wget -q --retry-connrefused --waitretry=2 --tries=5 \
-            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          VERSION=$(node -p "require('./frontend/package.json').version")
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool-x86_64.AppImage
           ./appimagetool-x86_64.AppImage --appimage-extract
-          ARCH=x86_64 ./squashfs-root/AppRun AppDir BIP39Recovery-linux.AppImage
-          chmod +x BIP39Recovery-linux.AppImage
+          ARCH=x86_64 ./squashfs-root/AppRun AppDir "BIP39Recovery-${VERSION}-linux-x86_64.AppImage"
+          chmod +x BIP39Recovery-${VERSION}-linux-x86_64.AppImage
 
-      - name: 验证 WebKit 子进程存在
+      - name: 校验 WebKit 子进程
         run: |
-          ./BIP39Recovery-linux.AppImage --appimage-extract
+          ./BIP39Recovery-*-linux-x86_64.AppImage --appimage-extract
           test -x squashfs-root/usr/libexec/webkit2gtk-4.0/WebKitNetworkProcess
           test -x squashfs-root/usr/libexec/webkit2gtk-4.0/WebKitWebProcess
           test -x squashfs-root/usr/libexec/webkit2gtk-4.0/WebKitStorageProcess
@@ -195,28 +202,29 @@ jobs:
           # 在 Tails OS 中使用 BIP39 Recovery Tool
           ## 快速开始
           ```bash
-          chmod +x BIP39Recovery-linux.AppImage
-          ./BIP39Recovery-linux.AppImage
+          chmod +x BIP39Recovery-*-linux-x86_64.AppImage
+          ./BIP39Recovery-*-linux-x86_64.AppImage
           ```
           ✅ 无需安装依赖，完全离线运行  
           ⚠️ 使用完请立即重启 Tails 以清除内存。
           EOF
 
-      - name: 创建 tar.gz 与 SHA256 校验
+      - name: 打包与校验
         run: |
+          VERSION=$(node -p "require('./frontend/package.json').version")
           BINARY_PATH=$(find build/bin -type f -executable | head -n 1)
           cd build/bin
-          tar -czf ../../BIP39Recovery-linux.tar.gz "$(basename "$BINARY_PATH")"
+          tar -czf ../../BIP39Recovery-${VERSION}-linux.tar.gz "$(basename "$BINARY_PATH")"
           cd ../..
-          sha256sum BIP39Recovery-linux.AppImage BIP39Recovery-linux.tar.gz > SHA256SUMS.txt
+          sha256sum BIP39Recovery-${VERSION}-linux-x86_64.AppImage BIP39Recovery-${VERSION}-linux.tar.gz > SHA256SUMS.txt
 
       - name: 上传 Linux 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
           path: |
-            BIP39Recovery-linux.AppImage
-            BIP39Recovery-linux.tar.gz
+            BIP39Recovery-*-linux-x86_64.AppImage
+            BIP39Recovery-*-linux.tar.gz
             TAILS-USAGE.md
             SHA256SUMS.txt
           retention-days: 7
