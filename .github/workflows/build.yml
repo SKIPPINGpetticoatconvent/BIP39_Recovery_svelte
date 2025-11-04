@@ -73,7 +73,9 @@ jobs:
         run: |
           wails build -clean -platform linux/amd64
           mkdir -p AppDir/usr/bin
-          cp build/bin/BIP39Recovery AppDir/usr/bin/
+          BINARY_PATH=$(find build/bin -maxdepth 1 -type f -executable | head -n 1)
+          echo "Detected binary: $BINARY_PATH"
+          cp "$BINARY_PATH" AppDir/usr/bin/BIP39Recovery
           chmod +x AppDir/usr/bin/BIP39Recovery
 
       - name: 创建 Desktop 文件与图标
@@ -338,6 +340,8 @@ jobs:
           echo "### 🔒 安全提示" >> CHANGELOG.md
           echo "- 建议仅在离线（断网）环境中恢复助记词" >> CHANGELOG.md
           echo "- 使用完毕后重启 Tails 以清除内存" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "**构建时间:** $(date -u '+%Y-%m-%d %H:%M UTC')" >> CHANGELOG.md
 
       - name: 发布到 GitHub Release
         uses: softprops/action-gh-release@v2
