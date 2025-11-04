@@ -83,13 +83,23 @@ jobs:
           echo "=== 查找可执行文件 ==="
           find build -type f -executable -ls
 
-      - name: 下载 linuxdeploy 和 AppImage 工具
+      - name: 安装 FUSE 和下载 AppImage 工具
         run: |
-          # 下载 linuxdeploy（更现代的 AppImage 打包工具）
+          # 安装 FUSE
+          sudo apt-get install -y fuse libfuse2
+
+          # 下载并提取 appimagetool (避免 FUSE 问题)
+          wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          ./appimagetool-x86_64.AppImage --appimage-extract
+
+          # 下载 linuxdeploy
           wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy-x86_64.AppImage
+          ./linuxdeploy-x86_64.AppImage --appimage-extract
+          mv squashfs-root linuxdeploy-root
 
-          # 下载 linuxdeploy-plugin-gtk（处理 GTK 依赖）
+          # 下载 linuxdeploy-plugin-gtk
           wget https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
           chmod +x linuxdeploy-plugin-gtk.sh
 
@@ -146,7 +156,9 @@ jobs:
 
           # 使用 linuxdeploy 打包（自动处理依赖）
           export DEPLOY_GTK_VERSION=3
-          ./linuxdeploy-x86_64.AppImage \
+
+          # 使用提取后的 linuxdeploy
+          ./linuxdeploy-root/AppRun \
             --appdir AppDir \
             --plugin gtk \
             --executable AppDir/usr/bin/BIP39Recovery \
@@ -156,9 +168,6 @@ jobs:
               echo "linuxdeploy 失败，尝试使用传统方法..."
               
               # 传统 AppImage 方法作为后备
-              wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-              chmod +x appimagetool-x86_64.AppImage
-              
               # 复制 desktop 和图标到根目录
               cp AppDir/usr/share/applications/BIP39Recovery.desktop AppDir/
               if [ -f "AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png" ]; then
@@ -186,6 +195,8 @@ jobs:
           APPRUN
               chmod +x AppDir/AppRun
               
+              # 使用 extract-and-run 方式运行 appimagetool
+              ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir BIP39Recovery-x86_64.AppImage || \
               ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir BIP39Recovery-x86_64.AppImage
             }
 
