@@ -113,28 +113,46 @@ jobs:
             --desktop-file AppDir/usr/share/applications/BIP39Recovery.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
 
-      - name: 静态封装 WebKitGTK 动态库与子进程
+      - name: 静态封装 WebKitGTK 动态库与子进程（修正版）
         run: |
-          mkdir -p AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.0
-          sudo cp -a /usr/lib/x86_64-linux-gnu/webkit2gtk-4.0/* AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.0/ 2>/dev/null || true
-          [ -d /usr/libexec/webkit2gtk-4.0 ] && sudo cp -a /usr/libexec/webkit2gtk-4.0/* AppDir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.0/
+          mkdir -p AppDir/usr/libexec/webkit2gtk-4.0
+          if [ -d /usr/libexec/webkit2gtk-4.0 ]; then
+            cp -a /usr/libexec/webkit2gtk-4.0/* AppDir/usr/libexec/webkit2gtk-4.0/
+            chmod +x AppDir/usr/libexec/webkit2gtk-4.0/* || true
+          fi
+
+          mkdir -p AppDir/usr/lib/x86_64-linux-gnu
           for lib in libwebkit2gtk-4.0 libjavascriptcoregtk-4.0 libgtk-3 libgobject-2.0 libglib-2.0 libpango-1.0 libcairo; do
-            sudo cp -a /usr/lib/x86_64-linux-gnu/${lib}.so* AppDir/usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+            cp -a /usr/lib/x86_64-linux-gnu/${lib}.so* AppDir/usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
           done
 
-      - name: 创建 AppRun（免 FUSE 离线可执行）
+          find AppDir -type f -executable -exec strip --strip-unneeded {} + 2>/dev/null || true
+
+      - name: 创建 AppRun（修正版：禁用 gvfs + 支持 WebKit 子进程）
         run: |
           cat > AppDir/AppRun <<'APPRUN'
           #!/bin/bash
           SELF=$(readlink -f "$0")
           HERE=${SELF%/*}
+
           export PATH="${HERE}/usr/bin:${PATH}"
           export LD_LIBRARY_PATH="${HERE}/usr/lib/x86_64-linux-gnu:${HERE}/usr/lib:${LD_LIBRARY_PATH}"
-          export HOME="${HOME:-/home/amnesia}"
-          export TMPDIR="${TMPDIR:-/tmp}"
+
+          export GIO_USE_VFS=local
+          export GIO_MODULE_DIR="${HERE}/usr/lib/x86_64-linux-gnu/gio/modules"
+
+          export XDG_DATA_DIRS="${HERE}/usr/share:$XDG_DATA_DIRS"
+          export GSETTINGS_SCHEMA_DIR="${HERE}/usr/share/glib-2.0/schemas"
+          export GI_TYPELIB_PATH="${HERE}/usr/lib/girepository-1.0:${GI_TYPELIB_PATH}"
+
           export GDK_BACKEND=x11
           export GTK_THEME=Adwaita
           export WEBKIT_DISABLE_COMPOSITING_MODE=1
+          export WEBKIT_FORCE_SANDBOX=0
+
+          export HOME="${HOME:-/home/amnesia}"
+          export TMPDIR="${TMPDIR:-/tmp}"
+
           cd "${HERE}/usr/bin"
           exec ./BIP39Recovery "$@"
           APPRUN
@@ -148,13 +166,13 @@ jobs:
           ARCH=x86_64 ./squashfs-root/AppRun AppDir BIP39Recovery-linux.AppImage
           chmod +x BIP39Recovery-linux.AppImage
 
-      - name: 验证 AppImage 自包含性
+      - name: 验证 WebKit 子进程存在
         run: |
           ./BIP39Recovery-linux.AppImage --appimage-extract
-          ldd squashfs-root/usr/bin/BIP39Recovery | grep "not found" || echo "✅ 所有依赖已封装"
-          echo ""
-          echo "=== WebKit 子进程 ==="
-          find squashfs-root/usr/lib/x86_64-linux-gnu/webkit2gtk-4.0/ -type f | head -n 10
+          test -x squashfs-root/usr/libexec/webkit2gtk-4.0/WebKitNetworkProcess
+          test -x squashfs-root/usr/libexec/webkit2gtk-4.0/WebKitWebProcess
+          test -x squashfs-root/usr/libexec/webkit2gtk-4.0/WebKitStorageProcess
+          echo "✅ WebKit 子进程齐全"
 
       - name: 创建 Tails 使用说明
         run: |
