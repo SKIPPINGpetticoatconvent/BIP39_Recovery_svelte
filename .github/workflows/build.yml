@@ -54,7 +54,6 @@ jobs:
             build-essential \
             pkg-config \
             file \
-            appimagetool \
             desktop-file-utils \
             gir1.2-webkit2-4.0
 
@@ -103,7 +102,8 @@ jobs:
 
       - name: 使用 linuxdeploy 打包 GTK 依赖
         run: |
-          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q --retry-connrefused --waitretry=2 --tries=5 \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy-x86_64.AppImage
           ./linuxdeploy-x86_64.AppImage --appimage-extract
           ./squashfs-root/AppRun \
@@ -160,7 +160,8 @@ jobs:
 
       - name: 构建 AppImage（不依赖 FUSE）
         run: |
-          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          wget -q --retry-connrefused --waitretry=2 --tries=5 \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool-x86_64.AppImage
           ./appimagetool-x86_64.AppImage --appimage-extract
           ARCH=x86_64 ./squashfs-root/AppRun AppDir BIP39Recovery-linux.AppImage
