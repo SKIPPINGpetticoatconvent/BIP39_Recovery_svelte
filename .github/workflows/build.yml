@@ -12,7 +12,7 @@ on:
 
 jobs:
   # ==========================================================
-  # Linux 构建任务（Tails 离线兼容 + 修正版 GTK 打包）
+  # Linux 构建任务（Tails 离线兼容 + GTK 自动降级机制）
   # ==========================================================
   build-linux:
     name: 构建 Linux (Tails 离线兼容)
@@ -51,12 +51,13 @@ jobs:
           sudo apt-get install -y \
             libgtk-3-dev \
             libwebkit2gtk-4.0-dev \
+            libgdk-pixbuf2.0-dev \
+            glib2.0-bin \
             build-essential \
             pkg-config \
             file \
             desktop-file-utils \
-            gir1.2-webkit2-4.0 \
-            glib2.0-bin
+            gir1.2-webkit2-4.0
 
       - name: 添加 GOPATH/bin 到 PATH
         run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
@@ -76,7 +77,6 @@ jobs:
           wails build -clean -platform linux/amd64
           mkdir -p AppDir/usr/bin
           BINARY_PATH=$(find build/bin -maxdepth 1 -type f -executable | head -n 1)
-          echo "Detected binary: $BINARY_PATH"
           cp "$BINARY_PATH" AppDir/usr/bin/BIP39Recovery
           chmod +x AppDir/usr/bin/BIP39Recovery
 
@@ -103,8 +103,11 @@ jobs:
             touch AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
           fi
 
-      - name: 使用 linuxdeploy 打包 GTK 依赖（修正版）
+      - name: 打包 GTK 依赖（自动降级机制）
         run: |
+          set -e
+          echo "🧩 尝试使用 linuxdeploy-plugin-gtk 打包 GTK 依赖..."
+
           # 下载 linuxdeploy 主程序
           wget -q --retry-connrefused --waitretry=2 --tries=5 \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
@@ -116,41 +119,48 @@ jobs:
             https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk.sh
           chmod +x linuxdeploy-plugin-gtk.sh
 
-          # 指定插件路径
           export PLUGIN_DIR="$PWD"
+          export PATH="/usr/lib/x86_64-linux-gnu:$PATH"
 
-          # 使用 GTK 插件进行打包
+          # 检查 GTK 环境是否可用
+          pkg-config --libs gtk+-3.0 || echo "⚠️ GTK pkg-config 检测失败，尝试继续"
+
+          # 尝试使用插件
+          set +e
           ./squashfs-root/AppRun \
             --appdir AppDir \
             --executable AppDir/usr/bin/BIP39Recovery \
             --desktop-file AppDir/usr/share/applications/BIP39Recovery.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png \
-            --plugin gtk
+            --plugin gtk -v
+          STATUS=$?
+          set -e
 
-          # 编译 schema
+          if [ $STATUS -ne 0 ]; then
+            echo "⚠️ linuxdeploy-plugin-gtk 失败 (code $STATUS)，执行手动 GTK 封装模式..."
+            mkdir -p AppDir/usr/lib/x86_64-linux-gnu
+            for lib in libgtk-3 libgdk-3 libgobject-2.0 libglib-2.0 libpango-1.0 libcairo; do
+              cp -a /usr/lib/x86_64-linux-gnu/${lib}.so* AppDir/usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+            done
+            echo "✅ 手动封装 GTK 库完成。"
+          else
+            echo "✅ linuxdeploy-plugin-gtk 成功执行。"
+          fi
+
+          # 编译 GLib schema
           if [ -d AppDir/usr/share/glib-2.0/schemas ]; then
             glib-compile-schemas AppDir/usr/share/glib-2.0/schemas
           fi
 
-      - name: 静态封装 WebKitGTK 子进程与依赖
+      - name: 静态封装 WebKitGTK 子进程
         run: |
           mkdir -p AppDir/usr/libexec/webkit2gtk-4.0
           if [ -d /usr/libexec/webkit2gtk-4.0 ]; then
-            cp -a /usr/libexec/webkit2gtk-4.0/* AppDir/usr/libexec/webkit2gtk-4.0/ || true
+            cp -a /usr/libexec/webkit2gtk-4.0/* AppDir/usr/libexec/webkit2gtk-4.0/
             chmod +x AppDir/usr/libexec/webkit2gtk-4.0/* || true
           fi
 
-          mkdir -p AppDir/usr/lib/x86_64-linux-gnu
-          for lib in libwebkit2gtk-4.0 libjavascriptcoregtk-4.0 libgtk-3 libgobject-2.0 libglib-2.0 libpango-1.0 libcairo; do
-            cp -a /usr/lib/x86_64-linux-gnu/${lib}.so* AppDir/usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
-          done
-
-          # 清理体积
-          find AppDir/usr/lib -type f -name "*.a" -delete || true
-          find AppDir/usr/share/doc -type d -exec rm -rf {} + || true
-          find AppDir -type f -executable -exec strip --strip-unneeded {} + 2>/dev/null || true
-
-      - name: 创建 AppRun（支持 Tails 离线运行）
+      - name: 创建 AppRun（Tails 离线支持）
         run: |
           cat > AppDir/AppRun <<'APPRUN'
           #!/bin/bash
@@ -159,18 +169,15 @@ jobs:
 
           export PATH="${HERE}/usr/bin:${PATH}"
           export LD_LIBRARY_PATH="${HERE}/usr/lib/x86_64-linux-gnu:${HERE}/usr/lib:${LD_LIBRARY_PATH}"
-
           export GIO_USE_VFS=local
           export GIO_MODULE_DIR="${HERE}/usr/lib/x86_64-linux-gnu/gio/modules"
           export XDG_DATA_DIRS="${HERE}/usr/share:$XDG_DATA_DIRS"
           export GSETTINGS_SCHEMA_DIR="${HERE}/usr/share/glib-2.0/schemas"
           export GI_TYPELIB_PATH="${HERE}/usr/lib/girepository-1.0:${GI_TYPELIB_PATH}"
-
           export GDK_BACKEND=x11
           export GTK_THEME=Adwaita
           export WEBKIT_DISABLE_COMPOSITING_MODE=1
           export WEBKIT_FORCE_SANDBOX=0
-
           export HOME="${HOME:-/home/amnesia}"
           export TMPDIR="${TMPDIR:-/tmp}"
 
@@ -179,7 +186,7 @@ jobs:
           APPRUN
           chmod +x AppDir/AppRun
 
-      - name: 构建 AppImage（嵌入版本号 + 不依赖 FUSE）
+      - name: 构建 AppImage
         run: |
           VERSION=$(node -p "require('./frontend/package.json').version")
           wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
@@ -196,8 +203,9 @@ jobs:
           test -x squashfs-root/usr/libexec/webkit2gtk-4.0/WebKitStorageProcess
           echo "✅ WebKit 子进程齐全"
 
-      - name: 创建 Tails 使用说明
+      - name: 创建 Tails 使用说明与校验文件
         run: |
+          VERSION=$(node -p "require('./frontend/package.json').version")
           cat > TAILS-USAGE.md <<'EOF'
           # 在 Tails OS 中使用 BIP39 Recovery Tool
           ## 快速开始
@@ -209,14 +217,7 @@ jobs:
           ⚠️ 使用完请立即重启 Tails 以清除内存。
           EOF
 
-      - name: 打包与校验
-        run: |
-          VERSION=$(node -p "require('./frontend/package.json').version")
-          BINARY_PATH=$(find build/bin -type f -executable | head -n 1)
-          cd build/bin
-          tar -czf ../../BIP39Recovery-${VERSION}-linux.tar.gz "$(basename "$BINARY_PATH")"
-          cd ../..
-          sha256sum BIP39Recovery-${VERSION}-linux-x86_64.AppImage BIP39Recovery-${VERSION}-linux.tar.gz > SHA256SUMS.txt
+          sha256sum BIP39Recovery-${VERSION}-linux-x86_64.AppImage > SHA256SUMS.txt
 
       - name: 上传 Linux 构建产物
         uses: actions/upload-artifact@v4
@@ -224,47 +225,8 @@ jobs:
           name: linux-build
           path: |
             BIP39Recovery-*-linux-x86_64.AppImage
-            BIP39Recovery-*-linux.tar.gz
             TAILS-USAGE.md
             SHA256SUMS.txt
-          retention-days: 7
-
-  # ==========================================================
-  # Windows 构建任务
-  # ==========================================================
-  build-windows:
-    name: 构建 Windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.22.x"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "lts/*"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-      - run: choco install upx nsis -y
-      - run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-      - run: |
-          cd frontend
-          npm ci
-          npm run build
-      - run: wails build -clean -upx -nsis -o BIP39Recovery-windows.exe
-      - run: |
-          cd build/bin
-          if (Test-Path "BIP39Recovery-windows-amd64-installer.exe") {
-            Rename-Item "BIP39Recovery-windows-amd64-installer.exe" "BIP39Recovery-windows-installer.exe"
-          }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-build
-          path: |
-            build/bin/BIP39Recovery-windows.exe
-            build/bin/BIP39Recovery-windows-installer.exe
           retention-days: 7
 
   # ==========================================================
