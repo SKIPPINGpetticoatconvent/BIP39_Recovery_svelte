@@ -55,7 +55,8 @@ jobs:
             pkg-config \
             file \
             desktop-file-utils \
-            gir1.2-webkit2-4.0
+            gir1.2-webkit2-4.0 \
+            glib2.0-bin
 
       - name: 添加 GOPATH/bin 到 PATH
         run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
@@ -102,18 +103,29 @@ jobs:
             touch AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
           fi
 
-      - name: 使用 linuxdeploy 打包 GTK 依赖
+      - name: 使用 linuxdeploy 打包 GTK 依赖（含 GTK 插件）
         run: |
+          # 下载主程序
           wget -q --retry-connrefused --waitretry=2 --tries=5 \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy-x86_64.AppImage
           ./linuxdeploy-x86_64.AppImage --appimage-extract
+
+          # 下载 GTK 插件
+          wget -q --retry-connrefused --waitretry=2 --tries=5 \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-plugin-gtk.sh
+
+          # 使用 GTK 插件进行打包
           ./squashfs-root/AppRun \
             --appdir AppDir \
             --plugin gtk \
             --executable AppDir/usr/bin/BIP39Recovery \
             --desktop-file AppDir/usr/share/applications/BIP39Recovery.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/BIP39Recovery.png
+
+          # 编译 schema，避免 GTK 设置加载错误
+          glib-compile-schemas AppDir/usr/share/glib-2.0/schemas || true
 
       - name: 静态封装 WebKitGTK 动态库与子进程（修正版）
         run: |
